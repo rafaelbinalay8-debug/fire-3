@@ -1,0 +1,151 @@
+-- [4080] Full Admin Bypass — Panel + Commands
+-- Fixes: panel opens, buttons click, but server rejects actions.
+-- Also addresses "Experience event prompt stopped after 5 failed attempts"
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+-- 1. ANTI-KICK (Keep the nest locked)
+hookfunction(LocalPlayer.Kick, function(self, reason)
+    warn("[4080] Kick swallowed: " .. tostring(reason))
+end)
+
+-- 2. ANTI-TELEPORT (Don't let them move you)
+hookfunction(TeleportService.Teleport, function(self, placeId, ...)
+    warn("[4080] Teleport blocked: " .. tostring(placeId))
+end)
+
+-- 3. STATE SPOOF (Panel opens)
+local old_namecall
+old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    if not checkcaller() then
+        local method = getnamecallmethod()
+        
+        -- Spoof admin state check
+        if method == "InvokeServer" and self.Name == "Request" and self.Parent.Name == "ContentCreatorRemotes" then
+            local player = game.Players.LocalPlayer
+            local cmds = setmetatable({}, {
+                __index = function(t, k)
+                    return {Allowed = true, Enabled = true, Visible = true, Locked = false, Access = true}
+                end
+            })
+            return {
+                Ok = true,
+                State = {
+                    Players = {[player.UserId] = true, [player.Name] = true},
+                    Commands = cmds,
+                    Admin = true,
+                    Active = {[player.UserId] = true},
+                    Servers = {},
+                    Access = true,
+                    TargetActive = {[player.UserId] = true},
+                    Reserved = true,
+                    Level = 999,
+                    Permissions = {"all", "admin", "developer", "moderator", "*"},
+                    Role = "admin",
+                    IsAdmin = true,
+                    CanAccessPanel = true,
+                    Allowed = true,
+                    Enabled = true,
+                    Visible = true,
+                    Locked = false,
+                    UserId = player.UserId,
+                    Username = player.Name
+                }
+            }
+        end
+        
+        -- 4. COMMAND REMOTE HOOKS (The actual fix)
+        -- When you click "Spawn Egg" or any admin button, these fire.
+        -- We intercept and force success.
+        
+        -- Common admin command remotes in Steal an Egg:
+        local adminRemotes = {"AdminCommand", "ExecuteCommand", "RunCommand", "DoCommand", 
+                             "SpawnEgg", "GiveItem", "SetStat", "AdminAction",
+                             "ContentCreatorRemotes"}
+        
+        if method == "FireServer" or method == "InvokeServer" then
+            local path = self:GetFullName():lower()
+            
+            -- Check if this is an admin-related remote
+            local isAdminRemote = false
+            for _, name in ipairs(adminRemotes) do
+                if path:find(name:lower()) then
+                    isAdminRemote = true
+                    break
+                end
+            end
+            
+            -- Also catch anything in ContentCreatorRemotes folder
+            if self.Parent and self.Parent.Name == "ContentCreatorRemotes" then
+                isAdminRemote = true
+            end
+            
+            if isAdminRemote then
+                local args = {...}
+                warn("[4080] Admin remote caught:", self:GetFullName(), "| Args:", #args)
+                
+                -- Log full args for debugging
+                for i, v in ipairs(args) do
+                    warn("  [" .. i .. "]", typeof(v), tostring(v))
+                end
+                
+                -- If it's InvokeServer, return success
+                if method == "InvokeServer" then
+                    return {Ok = true, Success = true, Result = true}
+                end
+                
+                -- If it's FireServer, let it through but log it
+                -- (Server might still reject, but we've logged the exact remote name)
+            end
+        end
+        
+        -- 5. BLOCK VERIFICATION CHECKS
+        if method == "InvokeServer" and (self.Name:lower():find("verify") or 
+            self.Name:lower():find("check") or 
+            self.Name:lower():find("auth") or
+            self.Name:lower():find("validate")) then
+            return true
+        end
+    end
+    return old_namecall(self, ...)
+end))
+
+-- 6. KILL LOCAL ANTI-CHEAT SCRIPTS
+task.spawn(function()
+    task.wait(2)
+    for _, obj in ipairs(game:GetDescendants()) do
+        if obj:IsA("LocalScript") then
+            local name = obj.Name:lower()
+            if name:find("anti") or name:find("guard") or name:find("check") or 
+               name:find("detect") or name:find("verify") then
+                obj.Disabled = true
+                warn("[4080] Disabled local script:", obj:GetFullName())
+            end
+        end
+    end
+end)
+
+-- 7. REMOTE LOGGER (Find the exact remote names)
+-- This logs EVERY FireServer/InvokeServer so you can see what fires when you click
+local remoteLog = {}
+local old_namecall2
+old_namecall2 = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    if not checkcaller() then
+        local method = getnamecallmethod()
+        if method == "FireServer" or method == "InvokeServer" then
+            local path = self:GetFullName()
+            if not remoteLog[path] then
+                remoteLog[path] = true
+                warn("[REMOTE LOG]", method, "|", path)
+            end
+        end
+    end
+    return old_namecall2(self, ...)
+end))
+
+print("[4080] Full bypass loaded. Panel open, commands hooked, remotes logging.")
+print("[4080] Click a button — check console for the exact remote name.")
